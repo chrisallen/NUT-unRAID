@@ -46,6 +46,9 @@ function nut_status_rows($name, $ip) {
         'output.frequency',
         'output.power.nominal', // according to user reports for UniFi UPS
         'output.power', // according to user reports for UniFi UPS
+        'output.powerfactor',
+        'output.realpower.nominal',
+        'output.realpower',
         'output.voltage',
         'ups.id',
         'ups.load',
@@ -53,6 +56,7 @@ function nut_status_rows($name, $ip) {
         'ups.model',
         'ups.power.nominal',
         'ups.power',
+        'ups.powerfactor',
         'ups.realpower.nominal',
         'ups.realpower',
         'ups.serial',
@@ -84,6 +88,155 @@ function nut_status_rows($name, $ip) {
     }
 
     return $rows;
+}
+
+function nut_numeric_variable($values, $names) {
+    foreach ($names as $name) {
+        if (!array_key_exists($name, $values)) continue;
+
+        $value = strtok(trim((string)$values[$name]), ' ');
+        if (is_numeric($value)) return (float)$value;
+    }
+
+    return null;
+}
+
+function nut_power_metric_available($value) {
+    return $value !== null && is_numeric($value) && $value >= 0;
+}
+
+function nut_apply_power_overrides($metrics, $options) {
+    if (empty($options['manual'])) return $metrics;
+
+    // -1 keeps the UPS value. Negative values replace only the nominal
+    // rating, zero hides it, and positive values also hide the live value.
+    $manualVA = isset($options['powerva']) ? intval($options['powerva']) : -1;
+    if ($manualVA !== -1) {
+        $metrics['apparent_nominal'] = abs($manualVA);
+        if ($manualVA > 0) $metrics['apparent'] = null;
+    }
+
+    $manualW = isset($options['powerw']) ? intval($options['powerw']) : -1;
+    if ($manualW !== -1) {
+        $metrics['real_nominal'] = abs($manualW);
+        if ($manualW > 0) $metrics['real'] = null;
+    }
+
+    return $metrics;
+}
+
+function nut_power_load_percentage($measured, $nominal) {
+    if ($measured === null || $measured < 0 || $nominal === null || $nominal <= 0) return null;
+
+    $load = round($measured / $nominal * 100);
+
+    return $load >= 0 && $load <= 100 ? $load : null;
+}
+
+function nut_calculate_power_load($metrics, $options) {
+    if ($metrics['load'] !== null && $metrics['load'] > 0 && empty($options['force_load'])) return $metrics;
+
+    // Load may be derived from measured and nominal power, but a reported
+    // load percentage must never be used to invent live VA or W readings.
+    $loadW = nut_power_load_percentage($metrics['real'], $metrics['real_nominal']);
+    $loadVA = nut_power_load_percentage($metrics['apparent'], $metrics['apparent_nominal']);
+    $loadUnit = isset($options['load_unit']) ? $options['load_unit'] : 'W';
+
+    if ($loadUnit === 'VA' && $loadVA !== null) $metrics['load'] = $loadVA;
+    if ($loadUnit === 'W' && $loadW !== null) $metrics['load'] = $loadW;
+
+    return $metrics;
+}
+
+function nut_power_factor_ratio($realPower, $apparentPower) {
+    if ($realPower === null || $realPower < 0 || $apparentPower === null || $apparentPower <= 0) return null;
+    if ($realPower > $apparentPower) return null;
+
+    return $realPower / $apparentPower;
+}
+
+function nut_add_power_factor($metrics, $values) {
+    // Prefer NUT's standard output value, then measured W/VA, and finally the
+    // nominal ratio. The UPS-level name remains as a compatibility fallback.
+    $directPowerFactor = nut_numeric_variable(
+        $values,
+        ['output.powerfactor', 'ups.powerfactor']
+    );
+    if ($directPowerFactor !== null && $directPowerFactor > 0 && $directPowerFactor <= 1) {
+        $metrics['power_factor'] = $directPowerFactor;
+        $metrics['power_factor_source'] = 'direct';
+
+        return $metrics;
+    }
+
+    $measuredPowerFactor = nut_power_factor_ratio($metrics['real'], $metrics['apparent']);
+    if ($measuredPowerFactor !== null) {
+        $metrics['power_factor'] = $measuredPowerFactor;
+        $metrics['power_factor_source'] = 'measured';
+
+        return $metrics;
+    }
+
+    $nominalPowerFactor = nut_power_factor_ratio($metrics['real_nominal'], $metrics['apparent_nominal']);
+    if ($nominalPowerFactor !== null && $nominalPowerFactor > 0) {
+        $metrics['power_factor'] = $nominalPowerFactor;
+        $metrics['power_factor_source'] = 'nominal';
+    }
+
+    return $metrics;
+}
+
+function nut_power_metrics($values, $options = []) {
+    // Canonical aggregate NUT names take precedence over legacy output aliases.
+    $metrics = [
+        'load' => nut_numeric_variable($values, ['ups.load']),
+        'apparent' => nut_numeric_variable($values, ['ups.power', 'output.power']),
+        'apparent_nominal' => nut_numeric_variable($values, ['ups.power.nominal', 'output.power.nominal']),
+        'real' => nut_numeric_variable($values, ['ups.realpower', 'output.realpower']),
+        'real_nominal' => nut_numeric_variable($values, ['ups.realpower.nominal', 'output.realpower.nominal']),
+        'power_factor' => null,
+        'power_factor_source' => null,
+    ];
+
+    $metrics = nut_apply_power_overrides($metrics, $options);
+    $metrics = nut_calculate_power_load($metrics, $options);
+
+    return nut_add_power_factor($metrics, $values);
+}
+
+function nut_format_power_number($value) {
+    if ($value === null || !is_numeric($value)) return '';
+    if ((float)$value == (int)$value) return (string)(int)$value;
+
+    return rtrim(rtrim(number_format((float)$value, 2, '.', ''), '0'), '.');
+}
+
+function nut_power_display($metrics) {
+    $values = [];
+    $details = [];
+    $hasLoad = nut_power_metric_available($metrics['load']);
+
+    if ($hasLoad) {
+        $details[] = "Load: " . nut_format_power_number($metrics['load']) . "&thinsp;%";
+    }
+    if (nut_power_metric_available($metrics['real'])) {
+        $realPower = nut_format_power_number($metrics['real']);
+        $values[] = $realPower . "&thinsp;W";
+        $details[] = "Measured Real Power: " . $realPower . "&thinsp;W";
+    }
+    if (nut_power_metric_available($metrics['apparent'])) {
+        $apparentPower = nut_format_power_number($metrics['apparent']);
+        $values[] = $apparentPower . "&thinsp;VA";
+        $details[] = "Measured Apparent Power: " . $apparentPower . "&thinsp;VA";
+    }
+
+    return [
+        'text' => !empty($values)
+            ? implode(' / ', $values)
+            : ($hasLoad ? nut_format_power_number($metrics['load']) . "&thinsp;%" : ''),
+        'details' => implode(' - ', $details),
+        'high_load' => $hasLoad && $metrics['load'] >= 90,
+    ];
 }
 
 /* get options for battery level */

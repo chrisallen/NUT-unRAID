@@ -44,7 +44,7 @@ if (file_exists('/usr/local/emhttp/plugins/nut-dw/misc/start-failed')) {
 </style>
 
 <table class="tablesorter shift nut" <?if (!$nut_running):?>style="display:none"<?endif;?>>
-<thead><tr><th>UPS Status</th><th>Battery Charge</th><th>Runtime Left</th><th>Nominal Power</th><th>UPS Load</th><th>UPS Load</th><th>Power Factor</th></tr></thead>
+<thead><tr><th>UPS Status</th><th>Battery Charge</th><th>Runtime Left</th><th>Nominal Power</th><th>Power Draw</th><th>UPS Load</th><th>Power Factor</th></tr></thead>
 <tbody id="nut_summary"><tr><td colspan="7" style="text-align:center"><i class="fa fa-spinner fa-spin"></i> <em>Please wait, retrieving UPS information...</em></td></tr></tbody>
 </table>
 
@@ -963,7 +963,8 @@ if (file_exists('/usr/local/emhttp/plugins/nut-dw/misc/start-failed')) {
     </dl>
 
     <blockquote class="inline_help">
-        <p>Settings for UPS Nominal Watt Capacity (W) and UPS Nominal Volt Ampere Capacity (VA), used to calculate the W/VA consumption (and PF):</p>
+        <p>Settings for overriding the UPS nominal Watt (W) and Volt Ampere (VA) capacities. These ratings may be used to calculate load percentage from measured power and to show a clearly labelled nominal power factor.</p>
+        <p>Live W and VA are only displayed when the UPS reports those measurements; they are not calculated from load percentage.</p>
         <p>- <strong><em>Auto</em></strong> if the values reported by your UPS are correct (see <strong><em>NUT Details</em></strong> table).</p>
         <p>- <strong><em>Manual</em></strong> if the values reported by your UPS are incorrect (see <strong><em>NUT Details</em></strong> table).</p>
     </blockquote>
@@ -980,8 +981,8 @@ if (file_exists('/usr/local/emhttp/plugins/nut-dw/misc/start-failed')) {
             <p>This setting lets you override the UPS Nominal Watt Capacity (W) value.</p>
             <p>A <strong><em>negative</em></strong> value overrides the nominal W (as positive), but still allows the UPS-reported live W to be used for calculations.</p>
             <p><strong><em>Use a negative value if the UPS-reported nominal W is missing or incorrect, but the UPS-reported live W is correct.</em></strong></p>
-            <p>A <strong><em>positive</em></strong> value overrides the nominal W and also affects the UPS-reported live W by forcing recalculation based on load.</p>
-            <p><strong><em>Use a positive value if the UPS-reported live W, or both UPS-reported nominal W and live W, are missing or incorrect.</em></strong></p>
+            <p>A <strong><em>positive</em></strong> value overrides the nominal W and hides the UPS-reported live W. It does not calculate a replacement live W from load percentage.</p>
+            <p><strong><em>Use a positive value if the UPS-reported live W is incorrect and should not be displayed.</em></strong></p>
             <p><em>Special Case:</em> A <strong>-1</strong> value disables the nominal W override (if you just want to override nominal VA).</p>
             <p><em>Special Case:</em> A <strong>0</strong> value hides the nominal W completely, but still allows the UPS-reported live W to be used for calculations.</p>
         </blockquote>
@@ -997,8 +998,8 @@ if (file_exists('/usr/local/emhttp/plugins/nut-dw/misc/start-failed')) {
             <p>This setting lets you override the UPS Nominal Volt Ampere Capacity (VA) value.</p>
             <p>A <strong><em>negative</em></strong> value overrides the nominal VA (as positive), but still allows the UPS-reported live VA to be used for calculations.</p>
             <p><strong><em>Use a negative value if the UPS-reported nominal VA is missing or incorrect, but the UPS-reported live VA is correct.</em></strong></p>
-            <p>A <strong><em>positive</em></strong> value overrides the nominal VA and also affects the UPS-reported live VA by forcing recalculation based on load.</p>
-            <p><strong><em>Use a positive value if the UPS-reported live VA, or both UPS-reported nominal VA and live VA, are missing or incorrect.</em></strong></p>
+            <p>A <strong><em>positive</em></strong> value overrides the nominal VA and hides the UPS-reported live VA. It does not calculate a replacement live VA from load percentage.</p>
+            <p><strong><em>Use a positive value if the UPS-reported live VA is incorrect and should not be displayed.</em></strong></p>
             <p><em>Special Case:</em> A <strong>-1</strong> value disables the nominal VA override (if you just want to override nominal W).</p>
             <p><em>Special Case:</em> A <strong>0</strong> value hides the nominal VA completely, but still allows the UPS-reported live VA to be used for calculations.</p>
         </blockquote>

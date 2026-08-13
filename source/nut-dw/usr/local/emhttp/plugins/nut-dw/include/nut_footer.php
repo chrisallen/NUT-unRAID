@@ -62,37 +62,13 @@ try {
     if (count($ups_status)) {
         $online           = (array_key_exists("ups.status", $ups_status) ? nut_ups_status([$ups_status["ups.status"]], true) : false );
         $battery          = (array_key_exists("battery.charge",$ups_status)) ? intval(strtok($ups_status['battery.charge'],' ')) : false;
-        $load             = (array_key_exists("ups.load", $ups_status)) ? intval(strtok($ups_status['ups.load'],' ')) : 0;
-        $realPower        = (array_key_exists("ups.realpower", $ups_status)) ? intval(strtok($ups_status['ups.realpower'],' ')) : NULL;
-        $realPowerNominal = (array_key_exists("ups.realpower.nominal", $ups_status)) ? intval(strtok($ups_status['ups.realpower.nominal'],' ')) : NULL;
-        $apparentPower    = (array_key_exists("ups.power", $ups_status)) ? intval(strtok($ups_status['ups.power'],' ')) : NULL;
-        $powerNominal     = (array_key_exists("ups.power.nominal", $ups_status)) ? intval(strtok($ups_status['ups.power.nominal'],' ')) : NULL;
-
-        if ($nut_power == 'manual') {
-            # handle nominal VA
-            $manual_powerva = intval($nut_powerva);
-            if ($manual_powerva != -1) { # -1 disables override (use UPS nominal)
-                $powerNominal = abs($manual_powerva); # Make it positive
-
-                if ($manual_powerva > 0) {
-                    # Positive value -> override nominal VA and affect live consumption VA
-                    $apparentPower = 0;
-                }
-                # negative or 0 -> override nominal but do not affect live VA
-            }
-
-            # Handle nominal W
-            $manual_powerw = intval($nut_powerw);
-            if ($manual_powerw != -1) { # -1 disables override (use UPS nominal)
-                $realPowerNominal = abs($manual_powerw); # Make it positive
-
-                if ($manual_powerw > 0) {
-                    # Positive value -> override nominal W and affect live consumption W
-                    $realPower = 0;
-                }
-                # negative or 0 -> override nominal but do not affect live W
-            }
-        }
+        $powerMetrics = nut_power_metrics($ups_status, [
+            'manual' => $nut_power == 'manual',
+            'powerva' => $nut_powerva,
+            'powerw' => $nut_powerw,
+            'force_load' => $nut_loadcalc == 'enable',
+            'load_unit' => $nut_loadunit,
+        ]);
 
         $ups_alarm = nut_array_key_exists_wildcard($ups_status, '*ups.alarm*');
         if (count($ups_alarm)) {
@@ -140,44 +116,11 @@ try {
 
         $status[1] = "<span id='" . ($nut_footer_style == 0 ? "nut_battery" : "") . "' class='".($nut_footer_style == 0 || $online['severity'] > 0 ? "tooltip-nut" : "")." " . $css_class . "'" . $statusTooltipData . "><i class='fa " . $fa_icon . "' style='vertical-align: baseline;'></i>&thinsp;" . $batteryText . "</span>";
 
-        # if no ups.load compute from ups.power(.nominal) or ups.realpower(.nominal)
-        # also compute if calculation is otherwise forced by user setting
-        if ($load <= 0 || $nut_loadcalc == "enable") {
-            $loadW = 0; $loadVA = 0;
-            if ($realPower > 0 && $realPowerNominal > 0) $loadW = round($realPower / $realPowerNominal  * 100);
-            if ($apparentPower > 0 && $powerNominal > 0) $loadVA = round($apparentPower / $powerNominal  * 100);
-            if ($nut_loadunit == "W" && $loadW > 1 && $loadW < 101) $load = $loadW;
-            if ($nut_loadunit == "VA" && $loadVA > 1 && $loadVA < 101) $load = $loadVA;
-        }
-
-        # if no ups.power compute from load and ups.power.nominal
-        if ($apparentPower <= 0) $apparentPower = $powerNominal > 0 && $load ? round($powerNominal * $load * 0.01) : 0;
-
-        # if no ups.realpower compute from load and ups.realpower.nominal (in W)
-        if ($realPower <= 0) $realPower = $realPowerNominal > 0 && $load ? round($realPowerNominal * $load * 0.01) : 0;
-
-        $powerText = '';
-        $powerTooltipData = '';
-
-        if ($realPower > 0 && $apparentPower > 0) {
-            # display load, real and apparent power
-            $powerText = "{$realPower}&thinsp;W&thinsp;({$apparentPower}&thinsp;VA)";
-            $powerTooltipData = "Load: $load&thinsp;% - Real Power: $realPower&thinsp;W - Apparent Power: $apparentPower&thinsp;VA";
-        } elseif ($realPower > 0 && $load) {
-            # display load and real power
-            $powerText = "{$realPower}&thinsp;W";
-            $powerTooltipData = "Load: $load&thinsp;% - Real Power: $realPower&thinsp;W";
-        } elseif ($apparentPower > 0 && $load) {
-            # display load and apparent power
-            $powerText = "{$apparentPower}&thinsp;VA";
-            $powerTooltipData = "Load: $load&thinsp;% - Apparent Power: $apparentPower&thinsp;VA";
-        } elseif ($load) {
-            # display load
-            $powerText = "{$load}&thinsp;%";
-            $powerTooltipData = "Load: $load&thinsp;%";
-        }
-
-        $powerTooltipData = " data='<b>NUT Power Metrics:</b><br>[{$nut_name}] " . $powerTooltipData . "'";
+        # Prefer measured power in the footer, with load percentage as fallback.
+        $powerDisplay = nut_power_display($powerMetrics);
+        $powerText = $powerDisplay['text'];
+        $powerTooltipData = " data='<b>NUT Power Metrics:</b><br>[{$nut_name}] "
+            . $powerDisplay['details'] . "'";
 
         # show connected clients in netserver mode
         if ($nut_mode == "netserver" && $nut_footer_conns !== "disable") {
@@ -202,7 +145,12 @@ try {
                 unset($status[3]);
             }
         }
-        $status[2] = "<span id='".($nut_footer_style == 0 ? "nut_power" : "")."' class='".($nut_footer_style == 0 || $load >= 90 ? "tooltip-nut" : "")." " . ($load >= 90 ? $red : ($nut_footer_style == 1 ? $black : $green)) . "'" . $powerTooltipData . "><i class='fa fa-plug'></i>&thinsp;" . $powerText . "</span>";
+        $highLoad = $powerDisplay['high_load'];
+        $powerClass = $highLoad ? $red : ($nut_footer_style == 1 ? $black : $green);
+        $status[2] = "<span id='" . ($nut_footer_style == 0 ? "nut_power" : "")
+            . "' class='" . ($nut_footer_style == 0 || $highLoad ? "tooltip-nut" : "")
+            . " " . $powerClass . "'" . $powerTooltipData
+            . "><i class='fa fa-plug'></i>&thinsp;" . $powerText . "</span>";
 
         if($nut_syslog_method == "file" || $nut_syslog_method == "both") {
             if(file_exists("/var/log/nut.log")) {

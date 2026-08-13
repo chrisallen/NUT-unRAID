@@ -62,11 +62,7 @@ try {
         $upsStatus = nut_ups_status($rows);
 
         $runtime = 0;
-        $realPower = 0;
-        $realPowerNominal = 0;
-        $apparentPower = 0;
-        $powerNominal = 0;
-        $load = 0;
+        $upsValues = [];
 
         $descriptorMapping = [];
         $descriptorFilePath = '/usr/share/nut/cmdvartab';
@@ -89,6 +85,7 @@ try {
             $row = array_map('trim', explode(':', $rows[$i], 2));
             $key = $row[0];
             $val = $row[1];
+            $upsValues[$key] = $val;
 
             switch ($key) {
                 case 'ups.status':
@@ -112,21 +109,6 @@ try {
                     $runtime   = $nut_rtunit == "minutes" ? gmdate("H:i:s", round($val*60)) : gmdate("H:i:s", round($val));
                     $status[2] = strtok(($nut_rtunit == "minutes" ? round($val) : round($val/60)),' ')<=5 && !in_array('ups.status: OL', $rows) ? "<td $red>$runtime</td>" : "<td $green>$runtime</td>";
                     break;
-                case 'ups.realpower':
-                    $realPower = strtok($val, ' ');
-                    break;
-                case 'ups.realpower.nominal':
-                    $realPowerNominal = strtok($val,' ');
-                    break;
-                case 'ups.power':
-                    $apparentPower = strtok($val, ' ');
-                    break;
-                case 'ups.power.nominal':
-                    $powerNominal = strtok($val,' ');
-                    break;
-                case 'ups.load':
-                    $load      = strtok($val,' ');
-                    break;
             }
 
             if ($all) {
@@ -142,76 +124,61 @@ try {
             }
         }
 
-        if ($nut_power == 'manual') {
-            # handle nominal VA
-            $manual_powerva = intval($nut_powerva);
-            if ($manual_powerva != -1) { # -1 disables override (use UPS nominal)
-                $powerNominal = abs($manual_powerva); # Make it positive
+        $powerMetrics = nut_power_metrics($upsValues, [
+            'manual' => $nut_power == 'manual',
+            'powerva' => $nut_powerva,
+            'powerw' => $nut_powerw,
+            'force_load' => $nut_loadcalc == 'enable',
+            'load_unit' => $nut_loadunit,
+        ]);
+        $realPower = $powerMetrics['real'];
+        $realPowerNominal = $powerMetrics['real_nominal'];
+        $apparentPower = $powerMetrics['apparent'];
+        $powerNominal = $powerMetrics['apparent_nominal'];
+        $load = $powerMetrics['load'];
 
-                if ($manual_powerva > 0) {
-                    # Positive value -> override nominal VA and affect live consumption VA
-                    $apparentPower = 0;
-                }
-                # negative or 0 -> override nominal but do not affect live VA
-            }
+        $hasLoad = nut_power_metric_available($load);
+        $highLoad = $hasLoad && $load >= 90;
+        $powerColor = $highLoad ? $red : $green;
 
-            # Handle nominal W
-            $manual_powerw = intval($nut_powerw);
-            if ($manual_powerw != -1) { # -1 disables override (use UPS nominal)
-                $realPowerNominal = abs($manual_powerw); # Make it positive
-
-                if ($manual_powerw > 0) {
-                    # Positive value -> override nominal W and affect live consumption W
-                    $realPower = 0;
-                }
-                # negative or 0 -> override nominal but do not affect live W
-            }
+        if ($hasLoad) {
+            $status[5] = "<td $powerColor>"
+                . nut_format_power_number($load) . "&thinsp;%</td>";
         }
-
-        # if no ups.load compute from ups.power(.nominal) or ups.realpower(.nominal)
-        # also compute if calculation is otherwise forced by user setting
-        if ($load <= 0 || $nut_loadcalc == "enable") {
-            $loadW = 0; $loadVA = 0;
-            if ($realPower > 0 && $realPowerNominal > 0) $loadW = round($realPower / $realPowerNominal  * 100);
-            if ($apparentPower > 0 && $powerNominal > 0) $loadVA = round($apparentPower / $powerNominal  * 100);
-            if ($nut_loadunit == "W" && $loadW > 1 && $loadW < 101) $load = $loadW;
-            if ($nut_loadunit == "VA" && $loadVA > 1 && $loadVA < 101) $load = $loadVA;
-        }
-
-        if ($load > 0) {
-            $status[5] = $load>=90 ? "<td $red>".intval($load). "&thinsp;%</td>" : "<td $green>".intval($load). "&thinsp;%</td>";
-        }
-
-        # if no ups.power compute from load and ups.power.nominal
-        if ($apparentPower <= 0) $apparentPower = $powerNominal > 0 && $load ? round($powerNominal * $load * 0.01) : 0;
-
-        # if no ups.realpower compute from load and ups.realpower.nominal (in W)
-        if ($realPower <= 0) $realPower = $realPowerNominal > 0 && $load ? round($realPowerNominal * $load * 0.01) : 0;
 
         if ($powerNominal > 0 && $realPowerNominal > 0) {
-            $status[3] = "<td $green>$realPowerNominal&thinsp;W ($powerNominal&thinsp;VA)</td>";
+            $status[3] = "<td $green>"
+                . nut_format_power_number($realPowerNominal) . "&thinsp;W / "
+                . nut_format_power_number($powerNominal) . "&thinsp;VA</td>";
         } elseif ($powerNominal > 0) {
-            $status[3] = "<td $green>$powerNominal&thinsp;VA</td>";
+            $status[3] = "<td $green>"
+                . nut_format_power_number($powerNominal) . "&thinsp;VA</td>";
         } elseif ($realPowerNominal > 0) {
-            $status[3] = "<td $green>$realPowerNominal&thinsp;W</td>";
+            $status[3] = "<td $green>"
+                . nut_format_power_number($realPowerNominal) . "&thinsp;W</td>";
         }
 
-        # display apparent power and real power if exists
-        if ($apparentPower > 0 && $realPower > 0) {
-            $status[4] = "<td " . ($load >= 90 ? $red : $green) . ">$realPower&thinsp;W ($apparentPower&thinsp;VA)</td>";
-        } elseif ($apparentPower > 0) {
-            $status[4] = "<td " . ($load >= 90 ? $red : $green) . ">$apparentPower&thinsp;VA</td>";
-        } elseif ($realPower > 0) {
-            $status[4] = "<td " . ($load >= 90 ? $red : $green) . ">$realPower&thinsp;W</td>";
+        # Display each measured power value independently, including zero.
+        $hasApparentPower = nut_power_metric_available($apparentPower);
+        $hasRealPower = nut_power_metric_available($realPower);
+        if ($hasApparentPower && $hasRealPower) {
+            $status[4] = "<td $powerColor>"
+                . nut_format_power_number($realPower) . "&thinsp;W / "
+                . nut_format_power_number($apparentPower) . "&thinsp;VA</td>";
+        } elseif ($hasApparentPower) {
+            $status[4] = "<td $powerColor>"
+                . nut_format_power_number($apparentPower) . "&thinsp;VA</td>";
+        } elseif ($hasRealPower) {
+            $status[4] = "<td $powerColor>"
+                . nut_format_power_number($realPower) . "&thinsp;W</td>";
         }
 
-        if ($realPower > 0 && $apparentPower > 0) {
-            # compute output power factor from real power and apparent power if available
-            $status[6] = "<td $green>".round($realPower / $apparentPower, 2)."</td>";
-        }
-        elseif ($realPowerNominal > 0 && $powerNominal > 0) {
-            # or present nominal power factor from ups.realpower.nominal and ups.power.nominal if available
-            $status[6] = "<td $green>".round($realPowerNominal / $powerNominal, 2)."</td>";
+        if ($powerMetrics['power_factor'] !== null) {
+            $powerFactorLabel = $powerMetrics['power_factor_source'] === 'nominal'
+                ? ' (nominal)'
+                : '';
+            $status[6] = "<td $green>" . round($powerMetrics['power_factor'], 2)
+                . $powerFactorLabel . "</td>";
         }
 
         if ($all && count($rows)%2==1) $result[] = "<td></td><td></td></tr>";
